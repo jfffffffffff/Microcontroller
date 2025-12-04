@@ -1,0 +1,99 @@
+#include <ESP32Servo.h>
+
+// --- Pines ---
+const int ldrIzquierdoPin = 34; 
+const int ldrDerechoPin = 33;   
+const int servoPin = 13;        
+
+Servo solarServo;
+
+// --- VALORES ---
+const int PARADA = 96;           
+const int VEL_HORARIO = 93;      
+const int VEL_ANTIHORARIO = 99; 
+
+const int COMPENSACION_IZQUIERDA = 53; 
+const int LIMITE_PASOS = 4;     
+const int TOLERANCIA = 50;       
+
+// --- DSP: CONFIGURACIÓN DE FILTRO ---
+// Cuantas más muestras, más suave (pero más lento reacciona).
+// 20 es un buen equilibrio para LDRs.
+const int MUESTRAS_DSP = 20; 
+
+// --- Variables ---
+int rawIzquierda = 0;   
+int izqCorregido = 0;   
+int rawDerecha = 0;     
+int diferencia = 0;
+int posicionVirtual = 0; 
+
+void setup() {
+  Serial.begin(115200);
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  solarServo.setPeriodHertz(50);
+  solarServo.attach(servoPin, 500, 2400);
+  solarServo.write(PARADA);
+
+  Serial.println("--- SISTEMA CON DSP BASICO (PROMEDIO) ---");
+}
+
+// --- FUNCIÓN DSP: LEER PROMEDIO ---
+// Esta función toma varias fotos rápidas y saca el promedio
+// para eliminar el ruido eléctrico.
+int leerSensorSuave(int pin) {
+  long suma = 0;
+  for(int i = 0; i < MUESTRAS_DSP; i++) {
+    suma += analogRead(pin);
+    delay(2); // Pequeña pausa entre lecturas para estabilidad
+  }
+  return suma / MUESTRAS_DSP;
+}
+
+void loop() {
+  
+  // 1. LECTURA CON DSP (Usamos la nueva función)
+  rawIzquierda = leerSensorSuave(ldrIzquierdoPin);
+  rawDerecha = leerSensorSuave(ldrDerechoPin);
+
+  // 2. APLICAR CORRECCIÓN (OFFSET)
+  izqCorregido = rawIzquierda + COMPENSACION_IZQUIERDA;
+
+  // 3. CALCULAR DIFERENCIA
+  diferencia = izqCorregido - rawDerecha;
+
+  // 4. IMPRIMIR
+  Serial.print("IZQ_DSP: "); Serial.print(rawIzquierda); // Ahora verás valores más estables
+  Serial.print(" | IZQ_CORR: "); Serial.print(izqCorregido); 
+  Serial.print(" || DER_DSP: "); Serial.print(rawDerecha);
+  Serial.print(" || DIF: "); Serial.println(diferencia);
+
+  // 5. LÓGICA DE CONTROL (Igual que antes)
+  if (abs(diferencia) > TOLERANCIA) {
+    
+    if (izqCorregido > rawDerecha) {
+      if (posicionVirtual < LIMITE_PASOS) {
+        solarServo.write(VEL_HORARIO);
+        posicionVirtual++; 
+      } else {
+        solarServo.write(PARADA);
+      }
+    } 
+    else {
+      if (posicionVirtual > -LIMITE_PASOS) {
+        solarServo.write(VEL_ANTIHORARIO);
+        posicionVirtual--; 
+      } else {
+        solarServo.write(PARADA);
+      }
+    }
+    delay(100); 
+
+  } else {
+    solarServo.write(PARADA);
+    delay(100);
+  }
+}
